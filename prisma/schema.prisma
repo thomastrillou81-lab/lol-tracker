@@ -1,0 +1,55 @@
+// Prisma Schema - League of Legends Tracker
+// PostgreSQL database with Player, Match, and ChampionSeasonStats models
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Joueur identifié par son PUUID Riot
+model Player {
+  id        String   @id @default(cuid())
+  puuid     String   @unique
+  gameName  String
+  tagLine   String
+  region    String   @default("EUW1")
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@index([gameName, tagLine])
+}
+
+/// Partie individuelle stockée pour éviter de re-fetcher l'API Riot
+model Match {
+  id           String   @id @default(cuid())
+  matchId      String   /// Ex: EUW1_1234567890
+  puuid        String   /// PUUID du joueur dans ce match
+  gameCreation DateTime /// Timestamp de début de la partie
+  championName String   /// Nom Data Dragon du champion
+  queueId      Int      /// 420 = Ranked Solo, 440 = Flex, etc.
+  season       Int      /// Année civile (2023, 2024, 2025, 2026)
+  createdAt    DateTime @default(now())
+
+  @@unique([matchId, puuid])
+  @@index([puuid, season])
+  @@index([puuid, championName, season])
+}
+
+/// Stats agrégées par champion et par saison (cache calculé)
+model ChampionSeasonStats {
+  id           String   @id @default(cuid())
+  puuid        String
+  championName String
+  season       Int
+  games        Int      @default(0)
+  isPartial    Boolean  @default(false) /// True si données incomplètes
+  updatedAt    DateTime @updatedAt
+  createdAt    DateTime @default(now())
+
+  @@unique([puuid, championName, season])
+  @@index([puuid, season])
+}
