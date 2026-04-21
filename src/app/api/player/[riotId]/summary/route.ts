@@ -10,7 +10,6 @@ import { getOrComputeChampionStats } from '@/lib/riot/championAggregationService
 import { prisma } from '@/lib/db';
 import type { ApiResponse, PlayerSummary } from '@/types';
 
-// Revalider la route toutes les 10 minutes maximum
 export const revalidate = 600;
 
 export async function GET(
@@ -41,18 +40,13 @@ export async function GET(
     let isPartial = false;
 
     if (needsSync) {
-      // 3. Sync des matchs pour toutes les saisons
       const seasonRanges = getSeasonDateRanges();
-
       const syncResults = await Promise.allSettled(
         seasonRanges.map((range) => syncMatchesForSeason(account.puuid, range, region))
       );
-
       isPartial = syncResults.some(
         (r) => r.status === 'fulfilled' && r.value.isPartial
       );
-
-      // Mettre à jour le timestamp du joueur
       await prisma.player.upsert({
         where: { puuid: account.puuid },
         update: { gameName: account.gameName, tagLine: account.tagLine, region },
@@ -60,13 +54,18 @@ export async function GET(
       });
     }
 
-    // 4. Récupérer les infos summoner (icône, level)
+    // 3. Récupérer les infos summoner (icône, level)
     const summoner = await getSummonerByPuuid(account.puuid, region);
 
-    // 5. Récupérer le rank
-    const rank = await getRankBySummonerId(summoner.id, region);
+    // 4. Récupérer le rank — optionnel, ne plante pas si erreur
+    let rank = null;
+    try {
+      rank = await getRankBySummonerId(summoner.id, region);
+    } catch (err) {
+      console.warn('Rank non disponible (ignoré):', err);
+    }
 
-    // 6. Calculer le top 5 champions
+    // 5. Calculer le top 5 champions
     const topChampions = await getOrComputeChampionStats(account.puuid, isPartial);
 
     const response: PlayerSummary = {
@@ -85,6 +84,7 @@ export async function GET(
       success: true,
       data: response,
     });
+
   } catch (err) {
     if (err instanceof RiotRateLimitError) {
       return NextResponse.json<ApiResponse<never>>(
