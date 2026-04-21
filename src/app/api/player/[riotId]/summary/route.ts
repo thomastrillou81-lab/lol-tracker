@@ -1,6 +1,3 @@
-// API Route : GET /api/player/[riotId]/summary
-// Agrège toutes les données d'un joueur : rank + top 5 champions par saison
-
 import { NextRequest, NextResponse } from 'next/server';
 import { parseRiotId, getSeasonDateRanges } from '@/lib/utils';
 import { getAccountByRiotId, getSummonerByPuuid, RiotRateLimitError, RiotNotFoundError } from '@/lib/riot/riotAccountService';
@@ -32,11 +29,10 @@ export async function GET(
     // 1. Récupérer le compte (PUUID)
     const account = await getAccountByRiotId(parsed.gameName, parsed.tagLine, region);
 
-    // 2. Vérifier si on a déjà synchronisé récemment (< 30 min)
+    // 2. Sync matchs si nécessaire
     const player = await prisma.player.findUnique({ where: { puuid: account.puuid } });
     const THIRTY_MIN = 30 * 60 * 1000;
     const needsSync = !player || Date.now() - player.updatedAt.getTime() > THIRTY_MIN;
-
     let isPartial = false;
 
     if (needsSync) {
@@ -54,26 +50,38 @@ export async function GET(
       });
     }
 
-    // 3. Récupérer les infos summoner (icône, level)
-    const summoner = await getSummonerByPuuid(account.puuid, region);
-
-    // 4. Récupérer le rank — optionnel, ne plante pas si erreur
-    let rank = null;
+    // 3. Récupérer les infos summoner — optionnel
+    let profileIconId = 1;
+    let summonerLevel = 0;
+    let summonerId = '';
     try {
-      rank = await getRankBySummonerId(summoner.id, region);
+      const summoner = await getSummonerByPuuid(account.puuid, region);
+      profileIconId = summoner.profileIconId;
+      summonerLevel = summoner.summonerLevel;
+      summonerId = summoner.id;
     } catch (err) {
-      console.warn('Rank non disponible (ignoré):', err);
+      console.warn('Summoner non disponible (ignoré):', err);
     }
 
-    // 5. Calculer le top 5 champions
+    // 4. Récupérer le rank — optionnel
+    let rank = null;
+    if (summonerId) {
+      try {
+        rank = await getRankBySummonerId(summonerId, region);
+      } catch (err) {
+        console.warn('Rank non disponible (ignoré):', err);
+      }
+    }
+
+    // 5. Top 5 champions
     const topChampions = await getOrComputeChampionStats(account.puuid, isPartial);
 
     const response: PlayerSummary = {
       puuid: account.puuid,
       gameName: account.gameName,
       tagLine: account.tagLine,
-      profileIconId: summoner.profileIconId,
-      summonerLevel: summoner.summonerLevel,
+      profileIconId,
+      summonerLevel,
       region,
       rank,
       topChampions,
