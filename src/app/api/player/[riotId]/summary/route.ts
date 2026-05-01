@@ -7,7 +7,8 @@ import { getOrComputeChampionStats } from '@/lib/riot/championAggregationService
 import { prisma } from '@/lib/db';
 import type { ApiResponse, PlayerSummary } from '@/types';
 
-export const revalidate = 600;
+export const maxDuration = 60;
+export const revalidate = 0;
 
 export async function GET(
   request: NextRequest,
@@ -26,31 +27,36 @@ export async function GET(
 
     const region = (request.nextUrl.searchParams.get('region') ?? 'EUW1') as any;
 
-    // 1. Récupérer le compte (PUUID)
+    // 1. Récupérer le compte
     const account = await getAccountByRiotId(parsed.gameName, parsed.tagLine, region);
 
-    // 2. Sync matchs si nécessaire
-    const player = await prisma.player.findUnique({ where: { puuid: account.puuid } });
-    const THIRTY_MIN = 30 * 60 * 1000;
-    const needsSync = !player || Date.now() - player.updatedAt.getTime() > THIRTY_MIN;
+    // 2. Invalider le cache champion pour forcer recalcul
+    await prisma.championSeasonStats.deleteMany({ where: { puuid: account.puuid } });
+
+    // 3. Sync TOUTES les saisons (toujours, pas de cache sur needsSync)
+    const seasonRanges = getSeasonDateRanges();
     let isPartial = false;
 
-    if (needsSync) {
-      const seasonRanges = getSeasonDateRanges();
-      const syncResults = await Promise.allSettled(
-        seasonRanges.map((range) => syncMatchesForSeason(account.puuid, range, region))
-      );
-      isPartial = syncResults.some(
-        (r) => r.status === 'fulfilled' && r.value.isPartial
-      );
-      await prisma.player.upsert({
-        where: { puuid: account.puuid },
-        update: { gameName: account.gameName, tagLine: account.tagLine, region },
-        create: { puuid: account.puuid, gameName: account.gameName, tagLine: account.tagLine, region },
-      });
+    for (const range of seasonRanges) {
+      try {
+        console.log(`[sync] start season=${range.season}`);
+        const result = await syncMatchesForSeason(account.puuid, range, region);
+        console.log(`[sync] done season=${range.season}`, result);
+        if (result.isPartial) isPartial = true;
+      } catch (err) {
+        console.error(`[sync] failed season=${range.season}`, err);
+        isPartial = true;
+      }
     }
 
-    // 3. Récupérer les infos summoner — optionnel
+    // 4. Upsert joueur APRÈS la sync
+    await prisma.player.upsert({
+      where: { puuid: account.puuid },
+      update: { gameName: account.gameName, tagLine: account.tagLine, region },
+      create: { puuid: account.puuid, gameName: account.gameName, tagLine: account.tagLine, region },
+    });
+
+    // 5. Summoner
     let profileIconId = 1;
     let summonerLevel = 0;
     let summonerId = '';
@@ -60,20 +66,20 @@ export async function GET(
       summonerLevel = summoner.summonerLevel;
       summonerId = summoner.id;
     } catch (err) {
-      console.warn('Summoner non disponible (ignoré):', err);
+      console.warn('Summoner ignoré:', err);
     }
 
-    // 4. Récupérer le rank — optionnel
+    // 6. Rank
     let rank = null;
     if (summonerId) {
       try {
         rank = await getRankBySummonerId(summonerId, region);
       } catch (err) {
-        console.warn('Rank non disponible (ignoré):', err);
+        console.warn('Rank ignoré:', err);
       }
     }
 
-    // 5. Top 5 champions
+    // 7. Top 5 champions
     const topChampions = await getOrComputeChampionStats(account.puuid, isPartial);
 
     const response: PlayerSummary = {
@@ -96,7 +102,7 @@ export async function GET(
   } catch (err) {
     if (err instanceof RiotRateLimitError) {
       return NextResponse.json<ApiResponse<never>>(
-        { success: false, error: 'Rate limit Riot atteint. Réessayez dans quelques secondes.', code: 'RATE_LIMIT' },
+        { success: false, error: 'Rate limit Riot. Réessayez dans quelques secondes.', code: 'RATE_LIMIT' },
         { status: 429 }
       );
     }
@@ -106,7 +112,7 @@ export async function GET(
         { status: 404 }
       );
     }
-    console.error('Erreur /api/player/[riotId]/summary:', err);
+    console.error('Erreur summary:', err);
     return NextResponse.json<ApiResponse<never>>(
       { success: false, error: 'Erreur serveur inattendue', code: 'SERVER_ERROR' },
       { status: 500 }
