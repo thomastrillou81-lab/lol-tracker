@@ -26,7 +26,7 @@ export function parseRiotId(input: string): ParsedRiotId | null {
   if (gameName.length < 3 || gameName.length > 16) return null;
   if (tagLine.length < 2 || tagLine.length > 5) return null;
   if (!/^[a-zA-Z0-9 _\.]+$/.test(gameName)) return null;
-  if (!/^[a-zA-Z0-9]+$/.test(tagLine)) return null;
+  if (!/^[a-zA-Z0-9\u00C0-\u017E]+$/.test(tagLine)) return null;
 
   return { gameName, tagLine };
 }
