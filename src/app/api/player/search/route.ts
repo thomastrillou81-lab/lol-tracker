@@ -1,10 +1,6 @@
-// API Route : POST /api/player/search
-// Valide le Riot ID et retourne le PUUID + infos de base
-
 import { NextRequest, NextResponse } from 'next/server';
 import { parseRiotId } from '@/lib/utils';
 import { getAccountByRiotId, RiotRateLimitError, RiotNotFoundError } from '@/lib/riot/riotAccountService';
-import { prisma } from '@/lib/db';
 import type { ApiResponse } from '@/types';
 
 export async function POST(request: NextRequest) {
@@ -12,7 +8,6 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { riotId, region = 'EUW1' } = body as { riotId: string; region?: string };
 
-    // 1. Validation du format Riot ID
     const parsed = parseRiotId(riotId);
     if (!parsed) {
       return NextResponse.json<ApiResponse<never>>(
@@ -21,17 +16,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 2. Récupérer le compte Riot
     const account = await getAccountByRiotId(parsed.gameName, parsed.tagLine, region as any);
 
-    // 3. Upsert en base (mise à jour si le joueur existe déjà)
-    await prisma.player.upsert({
-      where: { puuid: account.puuid },
-      update: { gameName: account.gameName, tagLine: account.tagLine, region },
-      create: { puuid: account.puuid, gameName: account.gameName, tagLine: account.tagLine, region },
-    });
-
-    // 4. Retourner les infos de base pour rediriger vers la page résultat
     return NextResponse.json<ApiResponse<{ puuid: string; gameName: string; tagLine: string }>>({
       success: true,
       data: {
